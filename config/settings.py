@@ -9,7 +9,7 @@ BINANCE_WS_URL = "wss://stream.binance.com:9443/ws"
 # Trading settings
 DEFAULT_SYMBOL = "BTCUSDT"  # Default trading pair
 TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]  # Supported timeframes
-DEFAULT_TIMEFRAME = "1h"
+DEFAULT_TIMEFRAME = "5m"
 
 # Data collection settings
 DATA_FETCH_INTERVAL = 60  # seconds
