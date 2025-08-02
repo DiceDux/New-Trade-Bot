@@ -24,7 +24,13 @@ class FeatureAggregator(nn.Module):
         """
         super(FeatureAggregator, self).__init__()
         
-        self.input_size = num_features * embedding_size
+        self.num_features = num_features
+        self.embedding_size = embedding_size
+        
+        # Correct the input size calculation
+        # When we concatenate the attention-weighted sum (embedding_size) 
+        # with the plain concatenation (num_features * embedding_size)
+        self.input_size = embedding_size + (num_features * embedding_size)
         
         self.aggregator = nn.Sequential(
             nn.Linear(self.input_size, 256),
@@ -57,10 +63,23 @@ class FeatureAggregator(nn.Module):
         """
         if not features:
             logger.warning("No features provided to aggregator")
-            return torch.zeros((1, self.input_size), dtype=torch.float32)
+            return torch.zeros((1, self.embedding_size), dtype=torch.float32)
+        
+        # Check if all features have correct dimensions
+        valid_features = []
+        for i, feature in enumerate(features):
+            if feature.shape[-1] == self.embedding_size:
+                valid_features.append(feature)
+            else:
+                logger.warning(f"Feature {i} has invalid shape {feature.shape}, expected (..., {self.embedding_size})")
+        
+        if len(valid_features) == 0:
+            logger.warning("No valid features found")
+            # Return a zero tensor with the correct output shape
+            return torch.zeros((1, 256), dtype=torch.float32)
         
         # Stack features along dimension 1
-        stacked_features = torch.stack(features, dim=1)  # Shape: (batch_size, num_features, embedding_size)
+        stacked_features = torch.stack(valid_features, dim=1)  # Shape: (batch_size, num_features, embedding_size)
         
         # Calculate attention weights for each feature
         attention_weights = self.attention(stacked_features)  # Shape: (batch_size, num_features, 1)
@@ -73,10 +92,25 @@ class FeatureAggregator(nn.Module):
         
         # Also concatenate all features for additional information
         batch_size = features[0].shape[0]
-        concat_features = torch.cat([f.view(batch_size, -1) for f in features], dim=1)  # Shape: (batch_size, num_features * embedding_size)
+        concat_features = torch.cat([f.view(batch_size, -1) for f in valid_features], dim=1)  # Shape: (batch_size, num_valid_features * embedding_size)
         
         # Concatenate the attention-weighted sum with the plain concatenation
+        # Make sure the final shape is compatible with the linear layer
         final_features = torch.cat([combined, concat_features], dim=1)
+        
+        # Check input size compatibility with the first layer of aggregator
+        first_layer = self.aggregator[0]  # First linear layer
+        expected_input_size = first_layer.weight.shape[1]
+        
+        if final_features.shape[1] != expected_input_size:
+            logger.warning(f"Input size mismatch: got {final_features.shape[1]}, expected {expected_input_size}")
+            # Pad or truncate to match expected input size
+            if final_features.shape[1] < expected_input_size:
+                padding = torch.zeros((batch_size, expected_input_size - final_features.shape[1]), 
+                                     device=final_features.device, dtype=final_features.dtype)
+                final_features = torch.cat([final_features, padding], dim=1)
+            else:
+                final_features = final_features[:, :expected_input_size]
         
         # Process through aggregator
         return self.aggregator(final_features)
