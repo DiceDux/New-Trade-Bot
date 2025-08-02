@@ -21,7 +21,7 @@ logger = logging.getLogger("BinanceData")
 class BinanceDataCollector:
     """Collects market data from Binance"""
     
-    def __init__(self, symbol="BTCUSDT", timeframe="1h"):
+    def __init__(self, symbol="BTCUSDT", timeframe="5m"):
         self.symbol = symbol
         self.timeframe = timeframe
         self.ws = None
