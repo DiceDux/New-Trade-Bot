@@ -57,9 +57,9 @@ class IndicatorEncoder(nn.Module):
         Returns:
             DataFrame with technical indicators added
         """
-        if df.empty:
+        if df is None or df.empty:
             logger.warning("Empty DataFrame provided for indicator calculation")
-            return df
+            return pd.DataFrame()
         
         try:
             # Make a copy to avoid modifying the original DataFrame
@@ -87,8 +87,8 @@ class IndicatorEncoder(nn.Module):
             data['bb_lower'] = bbands['BBL_20_2.0']
             
             # BB width and %B
-            data['bb_width'] = (data['bb_upper'] - data['bb_lower']) / data['bb_middle']
-            data['bb_pct_b'] = (data['close'] - data['bb_lower']) / (data['bb_upper'] - data['bb_lower'])
+            data['bb_width'] = (data['bb_upper'] - data['bb_lower']) / data['bb_middle'].replace(0, np.nan).fillna(1)
+            data['bb_pct_b'] = (data['close'] - data['bb_lower']) / (data['bb_upper'] - data['bb_lower'] + 1e-10)
             
             # Moving Averages
             data['ema_9'] = ta.ema(data['close'], length=9)
@@ -120,82 +120,82 @@ class IndicatorEncoder(nn.Module):
             logger.error(f"Error calculating indicators: {str(e)}")
             return df
     
-def preprocess(self, df):
-    """
-    Preprocess technical indicators for the encoder
-    
-    Args:
-        df: DataFrame with OHLCV data and calculated indicators
+    def preprocess(self, df):
+        """
+        Preprocess technical indicators for the encoder
         
-    Returns:
-        Tensor ready for encoder input
-    """
-    if df is None or df.empty:
-        logger.warning("Empty DataFrame provided to indicator encoder")
-        # Return zeros if no data
-        return torch.zeros((1, 20), dtype=torch.float32)
-    
-    try:
-        # Extract latest values for each indicator
-        latest = df.iloc[-1]
-        
-        # Select indicators for feature vector
-        indicators = [
-            'rsi_14', 'macd', 'macd_signal', 'macd_hist',
-            'bb_width', 'bb_pct_b',
-            'ema_9', 'sma_20', 'sma_50', 'sma_200',
-            'adx', 'di_plus', 'di_minus', 'atr',
-            'stoch_k', 'stoch_d', 'obv'
-        ]
-        
-        # Create features array, handling missing indicators
-        features = []
-        for ind in indicators:
-            if ind in latest.index and not pd.isna(latest[ind]):
-                features.append(float(latest[ind]))  # Make sure it's float
-            else:
-                features.append(0.0)  # Default value for missing indicators
-        
-        # Add some derived features
-        # MA crossovers
-        if all(ind in latest.index and not pd.isna(latest[ind]) for ind in ['ema_9', 'sma_20']):
-            features.append(float(latest['ema_9']) / float(latest['sma_20']) - 1)
-        else:
-            features.append(0.0)
+        Args:
+            df: DataFrame with OHLCV data and calculated indicators
             
-        if all(ind in latest.index and not pd.isna(latest[ind]) for ind in ['sma_50', 'sma_200']):
-            features.append(float(latest['sma_50']) / float(latest['sma_200']) - 1)
-        else:
-            features.append(0.0)
+        Returns:
+            Tensor ready for encoder input
+        """
+        if df is None or df.empty:
+            logger.warning("Empty DataFrame provided to indicator encoder")
+            # Return zeros if no data
+            return torch.zeros((1, 20), dtype=torch.float32)
         
-        # Stochastic crossover
-        if all(ind in latest.index and not pd.isna(latest[ind]) for ind in ['stoch_k', 'stoch_d']):
-            features.append(float(latest['stoch_k']) - float(latest['stoch_d']))
-        else:
-            features.append(0.0)
+        try:
+            # Extract latest values for each indicator
+            latest = df.iloc[-1]
+            
+            # Select indicators for feature vector
+            indicators = [
+                'rsi_14', 'macd', 'macd_signal', 'macd_hist',
+                'bb_width', 'bb_pct_b',
+                'ema_9', 'sma_20', 'sma_50', 'sma_200',
+                'adx', 'di_plus', 'di_minus', 'atr',
+                'stoch_k', 'stoch_d', 'obv'
+            ]
+            
+            # Create features array, handling missing indicators
+            features = []
+            for ind in indicators:
+                if ind in latest.index and not pd.isna(latest[ind]):
+                    features.append(float(latest[ind]))  # Make sure it's float
+                else:
+                    features.append(0.0)  # Default value for missing indicators
+            
+            # Add some derived features
+            # MA crossovers
+            if all(ind in latest.index and not pd.isna(latest[ind]) for ind in ['ema_9', 'sma_20']):
+                features.append(float(latest['ema_9']) / float(latest['sma_20']) - 1)
+            else:
+                features.append(0.0)
+                
+            if all(ind in latest.index and not pd.isna(latest[ind]) for ind in ['sma_50', 'sma_200']):
+                features.append(float(latest['sma_50']) / float(latest['sma_200']) - 1)
+            else:
+                features.append(0.0)
+            
+            # Stochastic crossover
+            if all(ind in latest.index and not pd.isna(latest[ind]) for ind in ['stoch_k', 'stoch_d']):
+                features.append(float(latest['stoch_k']) - float(latest['stoch_d']))
+            else:
+                features.append(0.0)
+            
+            # Normalize features
+            features_array = np.array(features, dtype=np.float32)
+            
+            # Specific normalizations
+            # RSI is already 0-100, normalize to -1 to 1
+            if features_array[0] != 0:  # RSI
+                features_array[0] = (features_array[0] - 50) / 50
+            
+            # Normalize MACD values
+            macd_indices = [1, 2, 3]  # macd, signal, hist
+            if any(features_array[i] != 0 for i in macd_indices):
+                macd_scale = max(abs(features_array[i]) for i in macd_indices) if any(features_array[i] != 0 for i in macd_indices) else 1
+                for i in macd_indices:
+                    if macd_scale != 0:
+                        features_array[i] /= macd_scale
+            
+            # Clamp all values to [-1, 1] range
+            features_array = np.clip(features_array, -1, 1)
+            
+            return torch.tensor(features_array, dtype=torch.float32).unsqueeze(0)
         
-        # Normalize features
-        features_array = np.array(features, dtype=np.float32)
-        
-        # Specific normalizations
-        # RSI is already 0-100, normalize to -1 to 1
-        if features_array[0] != 0:  # RSI
-            features_array[0] = (features_array[0] - 50) / 50
-        
-        # Normalize MACD values
-        macd_indices = [1, 2, 3]  # macd, signal, hist
-        if any(features_array[i] != 0 for i in macd_indices):
-            macd_scale = max(abs(features_array[i]) for i in macd_indices) if any(features_array[i] != 0 for i in macd_indices) else 1
-            for i in macd_indices:
-                if macd_scale != 0:
-                    features_array[i] /= macd_scale
-        
-        # Clamp all values to [-1, 1] range
-        features_array = np.clip(features_array, -1, 1)
-        
-        return torch.tensor(features_array, dtype=torch.float32).unsqueeze(0)
-    
-    except Exception as e:
-        logger.error(f"Error preprocessing indicators: {str(e)}")
-        # Return zeros in case of error
-        return torch.zeros((1, 20), dtype=torch.float32)
+        except Exception as e:
+            logger.error(f"Error preprocessing indicators: {str(e)}")
+            # Return zeros in case of error
+            return torch.zeros((1, 20), dtype=torch.float32)
