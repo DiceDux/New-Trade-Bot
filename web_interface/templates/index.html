@@ -431,4 +431,214 @@
         }
 
         // Refresh signals
-        function refreshSignals
+        function refreshSignals() {
+            fetch('/api/signals')
+                .then(response => response.json())
+                .then(data => {
+                    const tableBody = document.getElementById('signals-table-body');
+                    
+                    if (data && data.length > 0) {
+                        let html = '';
+                        
+                        data.forEach(signal => {
+                            const signalClass = 
+                                signal.signal === 'BUY' ? 'signal-buy' :
+                                signal.signal === 'SELL' ? 'signal-sell' : 'signal-hold';
+                                
+                            const confidenceClass = 
+                                signal.confidence >= 0.7 ? 'positive' :
+                                signal.confidence <= 0.3 ? 'negative' : 'neutral';
+                                
+                            html += `
+                                <tr class="${signalClass}">
+                                    <td>${formatDate(signal.timestamp)}</td>
+                                    <td>${signal.signal}</td>
+                                    <td>${formatCurrency(signal.price)}</td>
+                                    <td class="${confidenceClass}">${(signal.confidence * 100).toFixed(1)}%</td>
+                                </tr>
+                            `;
+                        });
+                        
+                        tableBody.innerHTML = html;
+                    } else {
+                        tableBody.innerHTML = '<tr><td colspan="4" class="text-center">No signals yet</td></tr>';
+                    }
+                })
+                .catch(error => console.error('Error fetching signals:', error));
+        }
+        
+        // Refresh model stats
+        function refreshModelStats() {
+            fetch('/api/model-stats')
+                .then(response => response.json())
+                .then(data => {
+                    // Update market regime
+                    const marketRegime = document.getElementById('market-regime');
+                    marketRegime.textContent = data.market_regime.charAt(0).toUpperCase() + data.market_regime.slice(1);
+                    
+                    // Color based on regime
+                    if (data.market_regime === 'bullish') {
+                        marketRegime.className = 'positive';
+                    } else if (data.market_regime === 'bearish') {
+                        marketRegime.className = 'negative';
+                    } else {
+                        marketRegime.className = '';
+                    }
+                    
+                    // Update feature importance
+                    if (data.feature_importance) {
+                        const fi = data.feature_importance;
+                        const total = Object.values(fi).reduce((a, b) => a + b, 0);
+                        
+                        // Update progress bars
+                        if (fi.ohlcv !== undefined) {
+                            const percent = (fi.ohlcv / total * 100).toFixed(1);
+                            document.getElementById('ohlcv-importance').style.width = `${percent}%`;
+                            document.getElementById('ohlcv-importance').textContent = `OHLCV: ${percent}%`;
+                        }
+                        
+                        if (fi.indicator !== undefined) {
+                            const percent = (fi.indicator / total * 100).toFixed(1);
+                            document.getElementById('indicator-importance').style.width = `${percent}%`;
+                            document.getElementById('indicator-importance').textContent = `Indicators: ${percent}%`;
+                        }
+                        
+                        if (fi.sentiment !== undefined) {
+                            const percent = (fi.sentiment / total * 100).toFixed(1);
+                            document.getElementById('sentiment-importance').style.width = `${percent}%`;
+                            document.getElementById('sentiment-importance').textContent = `Sentiment: ${percent}%`;
+                        }
+                        
+                        if (fi.orderbook !== undefined) {
+                            const percent = (fi.orderbook / total * 100).toFixed(1);
+                            document.getElementById('orderbook-importance').style.width = `${percent}%`;
+                            document.getElementById('orderbook-importance').textContent = `OrderBook: ${percent}%`;
+                        }
+                    }
+                    
+                    // Update model update counts
+                    if (data.update_counts) {
+                        const updateCounts = document.getElementById('update-counts');
+                        let html = '<strong>Model Updates:</strong><ul>';
+                        
+                        for (const [model, count] of Object.entries(data.update_counts)) {
+                            html += `<li>${model}: ${count} updates</li>`;
+                        }
+                        
+                        html += '</ul>';
+                        updateCounts.innerHTML = html;
+                    }
+                })
+                .catch(error => console.error('Error fetching model stats:', error));
+        }
+        
+        // Refresh settings
+        function refreshSettings() {
+            fetch('/api/settings')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('symbol').value = data.symbol;
+                    document.getElementById('timeframe').value = data.timeframe;
+                    document.getElementById('risk').value = data.risk_per_trade;
+                    document.getElementById('take-profit').value = data.take_profit;
+                    document.getElementById('stop-loss').value = data.stop_loss;
+                })
+                .catch(error => console.error('Error fetching settings:', error));
+        }
+        
+        // Handle settings form submission
+        document.getElementById('settings-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const formData = {
+                symbol: document.getElementById('symbol').value,
+                timeframe: document.getElementById('timeframe').value,
+                risk_per_trade: parseFloat(document.getElementById('risk').value),
+                take_profit: parseFloat(document.getElementById('take-profit').value),
+                stop_loss: parseFloat(document.getElementById('stop-loss').value)
+            };
+            
+            fetch('/api/settings', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(formData)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    alert('Settings updated successfully');
+                    refreshChart();
+                } else {
+                    alert('Error: ' + data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error saving settings:', error);
+                alert('Error saving settings');
+            });
+        });
+        
+        // Handle control button
+        document.getElementById('control-btn').addEventListener('click', function() {
+            const currentStatus = this.textContent;
+            const action = currentStatus === 'Start' ? 'start' : 'stop';
+            
+            fetch('/api/control', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ action })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    if (action === 'start') {
+                        updateStatusDisplay('starting');
+                    } else {
+                        updateStatusDisplay('stopping');
+                    }
+                    setTimeout(checkStatus, 2000);
+                } else {
+                    alert(data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error controlling bot:', error);
+                alert('Error controlling bot');
+            });
+        });
+        
+        // Check bot status
+        function checkStatus() {
+            fetch('/api/status')
+                .then(response => response.json())
+                .then(data => {
+                    updateStatusDisplay(data.status);
+                })
+                .catch(error => console.error('Error checking status:', error));
+        }
+        
+        // Initialize page
+        function initPage() {
+            checkStatus();
+            refreshChart();
+            refreshPortfolio();
+            refreshPerformance();
+            refreshSignals();
+            refreshModelStats();
+            
+            // Set up periodic refreshes
+            setInterval(checkStatus, 10000);            // Check status every 10s
+            setInterval(refreshPortfolio, 5000);        // Refresh portfolio every 5s
+            setInterval(refreshPerformance, 30000);     // Refresh performance every 30s
+            setInterval(refreshChart, 30000);           // Refresh chart every 30s
+            setInterval(refreshSignals, 10000);         // Refresh signals every 10s
+            setInterval(refreshModelStats, 30000);      // Refresh model stats every 30s
+        }
+        
+        // Run initialization when page loads
+        window.addEventListener('load', initPage);
+    </script>
