@@ -120,26 +120,24 @@ class IndicatorEncoder(nn.Module):
             logger.error(f"Error calculating indicators: {str(e)}")
             return df
     
-    def preprocess(self, df):
-        """
-        Preprocess technical indicators for the encoder
+def preprocess(self, df):
+    """
+    Preprocess technical indicators for the encoder
+    
+    Args:
+        df: DataFrame with OHLCV data and calculated indicators
         
-        Args:
-            df: DataFrame with OHLCV data
-            
-        Returns:
-            Tensor ready for encoder input
-        """
-        if df.empty:
-            logger.warning("Empty DataFrame provided to indicator encoder")
-            # Return zeros if no data
-            return torch.zeros((1, 20), dtype=torch.float32)
-        
-        # Calculate indicators
-        df_with_indicators = self.calculate_indicators(df)
-        
+    Returns:
+        Tensor ready for encoder input
+    """
+    if df is None or df.empty:
+        logger.warning("Empty DataFrame provided to indicator encoder")
+        # Return zeros if no data
+        return torch.zeros((1, 20), dtype=torch.float32)
+    
+    try:
         # Extract latest values for each indicator
-        latest = df_with_indicators.iloc[-1]
+        latest = df.iloc[-1]
         
         # Select indicators for feature vector
         indicators = [
@@ -154,27 +152,27 @@ class IndicatorEncoder(nn.Module):
         features = []
         for ind in indicators:
             if ind in latest.index and not pd.isna(latest[ind]):
-                features.append(latest[ind])
+                features.append(float(latest[ind]))  # Make sure it's float
             else:
-                features.append(0)  # Default value for missing indicators
+                features.append(0.0)  # Default value for missing indicators
         
         # Add some derived features
         # MA crossovers
-        if all(ind in latest.index for ind in ['ema_9', 'sma_20']):
-            features.append(latest['ema_9'] / latest['sma_20'] - 1)
+        if all(ind in latest.index and not pd.isna(latest[ind]) for ind in ['ema_9', 'sma_20']):
+            features.append(float(latest['ema_9']) / float(latest['sma_20']) - 1)
         else:
-            features.append(0)
+            features.append(0.0)
             
-        if all(ind in latest.index for ind in ['sma_50', 'sma_200']):
-            features.append(latest['sma_50'] / latest['sma_200'] - 1)
+        if all(ind in latest.index and not pd.isna(latest[ind]) for ind in ['sma_50', 'sma_200']):
+            features.append(float(latest['sma_50']) / float(latest['sma_200']) - 1)
         else:
-            features.append(0)
+            features.append(0.0)
         
         # Stochastic crossover
-        if all(ind in latest.index for ind in ['stoch_k', 'stoch_d']):
-            features.append(latest['stoch_k'] - latest['stoch_d'])
+        if all(ind in latest.index and not pd.isna(latest[ind]) for ind in ['stoch_k', 'stoch_d']):
+            features.append(float(latest['stoch_k']) - float(latest['stoch_d']))
         else:
-            features.append(0)
+            features.append(0.0)
         
         # Normalize features
         features_array = np.array(features, dtype=np.float32)
@@ -196,3 +194,8 @@ class IndicatorEncoder(nn.Module):
         features_array = np.clip(features_array, -1, 1)
         
         return torch.tensor(features_array, dtype=torch.float32).unsqueeze(0)
+    
+    except Exception as e:
+        logger.error(f"Error preprocessing indicators: {str(e)}")
+        # Return zeros in case of error
+        return torch.zeros((1, 20), dtype=torch.float32)
