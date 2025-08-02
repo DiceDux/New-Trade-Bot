@@ -636,31 +636,45 @@ class CryptoTradingBot:
         except Exception as e:
             logger.error(f"Error saving trade history: {str(e)}")
     
-    def load_historical_data(self, file_path, timeframe="4h"):
+    def load_historical_data(self, symbol="BTCUSDT", timeframe="4h", start_date=None, end_date=None, limit=1000):
         """
-        Load historical OHLCV data from file
+        Load historical OHLCV data from MySQL database
         
         Args:
-            file_path: Path to the CSV file with historical data
+            symbol: Trading pair symbol
             timeframe: Timeframe of the data
+            start_date: Optional start date
+            end_date: Optional end date
+            limit: Maximum number of candles to return
             
         Returns:
             pandas.DataFrame: Loaded historical data
         """
         try:
-            if not os.path.exists(file_path):
-                logger.error(f"Historical data file not found: {file_path}")
+            from data_collectors.mysql_data import MySQLDataCollector
+            
+            # Initialize MySQL collector with your credentials
+            mysql_collector = MySQLDataCollector(
+                host="localhost",  # تغییر دهید اگر لازم است
+                user="root",       # تغییر دهید به نام کاربری MySQL خود
+                password="",       # تغییر دهید به رمز عبور MySQL خود
+                database="tradebot-pro"
+            )
+            
+            # Get data from MySQL
+            data = mysql_collector.get_historical_candles(
+                symbol=symbol,
+                timeframe=timeframe,
+                start_date=start_date,
+                end_date=end_date,
+                limit=limit
+            )
+            
+            if data.empty:
+                logger.warning(f"No historical data found in MySQL for {symbol} {timeframe}")
                 return None
             
-            # Load data from CSV
-            data = pd.read_csv(file_path)
-            
-            # Convert timestamp to datetime if present
-            if 'timestamp' in data.columns:
-                data['timestamp'] = pd.to_datetime(data['timestamp'])
-                data.set_index('timestamp', inplace=True)
-            
-            logger.info(f"Loaded {len(data)} historical candles from {file_path}")
+            logger.info(f"Loaded {len(data)} historical candles from MySQL for {symbol} {timeframe}")
             
             # Pass to adaptive learning system
             self.adaptive_learning.load_historical_data(data, timeframe)
@@ -668,7 +682,7 @@ class CryptoTradingBot:
             return data
             
         except Exception as e:
-            logger.error(f"Error loading historical data: {str(e)}")
+            logger.error(f"Error loading historical data from MySQL: {str(e)}")
             return None
     
     def train_on_historical_data(self, epochs=5):
