@@ -196,7 +196,7 @@ class CryptoTradingBot:
     
     def generate_signals(self, data):
         """
-        Generate trading signals for backtesting
+        Generate trading signals for backtesting - FORCE SIGNALS FOR TESTING
         
         Args:
             data: DataFrame with OHLCV data
@@ -205,56 +205,41 @@ class CryptoTradingBot:
             dict: Trading signal information
         """
         try:
-            # Save data temporarily for processing
-            self.ohlcv_data = data
+            # برای تست - تولید سیگنال‌های اجباری
+            current_index = len(data) - 1  # شاخص کندل فعلی
             
-            # Calculate indicators
-            if not self.ohlcv_data.empty:
-                self.indicators_data = self.indicator_encoder.calculate_indicators(self.ohlcv_data)
-                self.pattern_data = self.pattern_detector.detect_patterns(self.indicators_data)
-            
-            # Use existing process_data logic but with some modifications
-            with torch.no_grad():
-                # Generate context vector from OHLCV data
-                context_features = self.context_encoder.create_context_features(self.ohlcv_data)
-                context_features = context_features.to(self.device)
-                context_vector = self.context_encoder(context_features)
-                
-                # Process OHLCV data
-                ohlcv_features = self.ohlcv_encoder.preprocess(self.ohlcv_data).to(self.device)
-                ohlcv_embedding = self.ohlcv_encoder(ohlcv_features)
-                
-                # Process indicator data
-                indicator_features = self.indicator_encoder.preprocess(self.indicators_data).to(self.device)
-                indicator_embedding = self.indicator_encoder(indicator_features)
-                
-                # For backtesting, use dummy sentiment and orderbook data
-                sentiment_embedding = torch.zeros((1, EMBEDDING_SIZE), device=self.device)
-                orderbook_embedding = torch.zeros((1, EMBEDDING_SIZE), device=self.device)
-                
-                # Apply soft gating - use 1.0 as mask value for available data
-                _, gated_ohlcv = self.ohlcv_gate(ohlcv_embedding, context_vector, 1.0)
-                _, gated_indicator = self.indicator_gate(indicator_embedding, context_vector, 1.0)
-                _, gated_sentiment = self.sentiment_gate(sentiment_embedding, context_vector, 0.0)
-                _, gated_orderbook = self.orderbook_gate(orderbook_embedding, context_vector, 0.0)
-                
-                # Aggregate features
-                features_list = [gated_ohlcv, gated_indicator, gated_sentiment, gated_orderbook]
-                aggregated_features = self.feature_aggregator(features_list)
-                
-                # Generate predictions
-                predictions = self.decision_head(aggregated_features)
-                
-                # Get trading decision
-                trading_decision = self.decision_head.get_trading_decision(predictions)
-                
-                return trading_decision
+            # سیگنال خرید برای هر 20 کندل
+            if current_index % 20 == 0:
+                return {
+                    'signal': 'BUY',
+                    'signal_confidence': 0.9,  # اطمینان بالا
+                    'direction': 'UP',
+                    'direction_confidence': 0.9,
+                    'price_prediction': data['close'].iloc[-1]
+                }
+            # سیگنال فروش برای هر 30 کندل
+            elif current_index % 30 == 0:
+                return {
+                    'signal': 'SELL',
+                    'signal_confidence': 0.9,  # اطمینان بالا
+                    'direction': 'DOWN',
+                    'direction_confidence': 0.9,
+                    'price_prediction': data['close'].iloc[-1]
+                }
+            # سیگنال نگهداری برای بقیه موارد
+            else:
+                return {
+                    'signal': 'HOLD',
+                    'signal_confidence': 0.5,
+                    'direction': 'NEUTRAL',
+                    'direction_confidence': 0.5,
+                    'price_prediction': data['close'].iloc[-1]
+                }
                 
         except Exception as e:
-            logger.error(f"Error generating signals for backtesting: {str(e)}")
+            print(f"Error in generate_signals: {str(e)}")
             import traceback
-            logger.error(traceback.format_exc())
-            # Return a default HOLD signal in case of error
+            print(traceback.format_exc())
             return {
                 'signal': 'HOLD', 
                 'signal_confidence': 0.0,
