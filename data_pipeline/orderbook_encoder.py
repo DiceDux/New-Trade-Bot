@@ -59,7 +59,7 @@ class OrderBookEncoder(nn.Module):
         """
         if not orderbook_data or 'bids' not in orderbook_data or 'asks' not in orderbook_data:
             logger.warning("Invalid or empty order book data")
-            return torch.zeros((1, 40), dtype=torch.float32)
+            return torch.zeros((1, 40), dtype=torch.float32)  # 40 ویژگی به عنوان پیش‌فرض
         
         try:
             # Extract bids and asks
@@ -104,17 +104,23 @@ class OrderBookEncoder(nn.Module):
             bid_ask_ratio = np.sum(bid_quantities) / max(np.sum(ask_quantities), 1e-8)
             spread = (asks[0]['price'] - bids[0]['price']) / mid_price if bids[0]['price'] > 0 and asks[0]['price'] > 0 else 0
             
-            # Combine all features
+            # Combine all features - حداکثر 40 ویژگی انتخاب می‌کنیم
             features = np.concatenate([
-                bid_prices - 1.0,  # Center around 0
-                ask_prices - 1.0,  # Center around 0
-                bid_quantities,
-                ask_quantities,
-                bid_cumulative,
-                ask_cumulative,
+                bid_prices[:5] - 1.0,  # 5 سطح بیشتر کافی است
+                ask_prices[:5] - 1.0,  # 5 سطح بیشتر کافی است
+                bid_quantities[:5],
+                ask_quantities[:5],
+                bid_cumulative[:5],
+                ask_cumulative[:5],
                 [bid_ask_ratio, spread]
             ])
             
+            # اطمینان از اینکه دقیقاً 40 ویژگی داریم
+            if len(features) > 40:
+                features = features[:40]
+            elif len(features) < 40:
+                features = np.pad(features, (0, 40 - len(features)), 'constant')
+                
             # Clip values to a reasonable range
             features = np.clip(features, -5, 5)
             
