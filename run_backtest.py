@@ -38,7 +38,7 @@ except Exception as e:
 btc_data = mysql_collector.get_historical_candles(
     symbol=symbol_to_use, 
     timeframe="4h",
-    limit=10000  # دریافت آخرین 1000 کندل بدون محدودیت تاریخ
+    limit=1000  # دریافت آخرین 1000 کندل بدون محدودیت تاریخ
 )
 
 if btc_data.empty:
