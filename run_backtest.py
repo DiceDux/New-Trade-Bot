@@ -1,4 +1,5 @@
 import pandas as pd
+import os
 from tools.backtester import Backtester
 from trading_bot import CryptoTradingBot
 import matplotlib.pyplot as plt
