@@ -66,11 +66,11 @@ class MySQLDataCollector:
         
         Args:
             symbol: Trading pair symbol (e.g. 'BTCUSDT')
-            timeframe: Candle timeframe (e.g. '4h')
+            timeframe: Candle timeframe (e.g. '4h') - این پارامتر استفاده نمی‌شود چون در جدول ستون مربوطه وجود ندارد
             start_date: Optional start date (datetime or string)
             end_date: Optional end date (datetime or string)
             limit: Maximum number of candles to return
-            
+                
         Returns:
             pandas.DataFrame: OHLCV data
         """
@@ -79,19 +79,21 @@ class MySQLDataCollector:
                 if not self.connect():
                     return pd.DataFrame()
             
-            # Parse date strings to datetime if needed
-            if isinstance(start_date, str):
-                start_date = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S")
-            if isinstance(end_date, str):
-                end_date = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
-                
-            # Build query - حذف timeframe از کوئری
+            # Build query - بدون استفاده از timeframe
             query = f"SELECT * FROM candles WHERE symbol = '{symbol}'"
             
+            # تبدیل تاریخ به timestamp یونیکس اگر تاریخ مشخص شده است
             if start_date:
-                query += f" AND timestamp >= '{start_date}'"
+                if isinstance(start_date, str):
+                    start_date = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S")
+                start_timestamp = int(start_date.timestamp() * 1000)  # تبدیل به میلی‌ثانیه
+                query += f" AND timestamp >= {start_timestamp}"
+                
             if end_date:
-                query += f" AND timestamp <= '{end_date}'"
+                if isinstance(end_date, str):
+                    end_date = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
+                end_timestamp = int(end_date.timestamp() * 1000)  # تبدیل به میلی‌ثانیه
+                query += f" AND timestamp <= {end_timestamp}"
                 
             query += f" ORDER BY timestamp DESC LIMIT {limit}"
             
@@ -108,9 +110,9 @@ class MySQLDataCollector:
             # Convert to dataframe
             df = pd.DataFrame(rows)
             
-            # Convert timestamp to datetime if it's not already
-            if 'timestamp' in df.columns and not pd.api.types.is_datetime64_dtype(df['timestamp']):
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
+            # Convert timestamp (bigint) to datetime
+            if 'timestamp' in df.columns:
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             
             # Set timestamp as index
             if 'timestamp' in df.columns:
