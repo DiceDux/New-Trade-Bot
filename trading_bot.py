@@ -408,6 +408,16 @@ class CryptoTradingBot:
                 if len(self.predictions) > 100:
                     self.predictions = self.predictions[-100:]
                 
+                if trading_decision['signal'] in ['BUY', 'SELL']:
+                    # ذخیره ویژگی‌ها و تصمیم فعلی
+                    self.adaptive_learning.record_trade(
+                        signal=trading_decision['signal'],
+                        confidence=trading_decision['signal_confidence'],
+                        features=aggregated_features,  # ویژگی‌های تجمیع شده که به مدل تصمیم‌گیری داده شده
+                        price=current_price,
+                        timestamp=pd.Timestamp.now()
+                    )
+
                 return trading_decision
                 
         except Exception as e:
