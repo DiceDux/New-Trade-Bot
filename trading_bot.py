@@ -580,6 +580,11 @@ class CryptoTradingBot:
             self.binance_collector.close()
 
 if __name__ == "__main__":
+    # Create necessary directories
+    os.makedirs("logs", exist_ok=True)
+    os.makedirs("data", exist_ok=True)
+    os.makedirs("models", exist_ok=True)
+    
     # Configure logging
     logging.basicConfig(
         level=logging.INFO,
@@ -589,11 +594,6 @@ if __name__ == "__main__":
             logging.StreamHandler()
         ]
     )
-    
-    # Create necessary directories
-    os.makedirs("logs", exist_ok=True)
-    os.makedirs("data", exist_ok=True)
-    os.makedirs("models", exist_ok=True)
     
     # Create and run the trading bot
     trading_bot = CryptoTradingBot()
