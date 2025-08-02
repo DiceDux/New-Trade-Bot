@@ -10,6 +10,8 @@ import numpy as np
 from datetime import datetime
 import os
 import json
+import threading
+import psutil
 
 # Import data collectors
 from data_collectors.binance_data import BinanceDataCollector
@@ -19,6 +21,8 @@ from data_collectors.sentiment_data import SentimentCollector
 from data_pipeline.ohlcv_encoder import OHLCVEncoder
 from data_pipeline.indicator_encoder import IndicatorEncoder
 from data_pipeline.sentiment_encoder import SentimentEncoder
+from data_pipeline.orderbook_encoder import OrderBookEncoder
+from data_pipeline.candlestick_patterns import CandlestickPatterns
 
 # Import model components
 from models.mask_generator import MaskGenerator
@@ -26,6 +30,7 @@ from models.soft_gating import SoftGatingMechanism
 from models.context_encoder import ContextEncoder
 from models.feature_aggregator import FeatureAggregator
 from models.decision_head import DecisionHead
+from models.adaptive_learning import AdaptiveLearningSystem
 
 # Import configuration
 from config.settings import (
@@ -33,6 +38,9 @@ from config.settings import (
     EMBEDDING_SIZE, CONTEXT_SIZE, RISK_PER_TRADE, 
     TAKE_PROFIT_RATIO, STOP_LOSS_RATIO, INITIAL_CAPITAL
 )
+
+# Import web interface
+from web_interface.app import app, update_from_trading_bot, bot_message_queue
 
 logger = logging.getLogger("TradingBot")
 
@@ -57,10 +65,14 @@ class CryptoTradingBot:
         self.binance_collector = BinanceDataCollector(symbol=symbol, timeframe=timeframe)
         self.sentiment_collector = SentimentCollector()
         
+        # Initialize pattern detector
+        self.pattern_detector = CandlestickPatterns()
+        
         # Initialize data encoders
         self.ohlcv_encoder = OHLCVEncoder().to(self.device)
         self.indicator_encoder = IndicatorEncoder().to(self.device)
         self.sentiment_encoder = SentimentEncoder().to(self.device)
+        self.orderbook_encoder = OrderBookEncoder().to(self.device)
         
         # Initialize model components
         self.mask_generator = MaskGenerator()
@@ -72,15 +84,28 @@ class CryptoTradingBot:
         self.ohlcv_gate = SoftGatingMechanism().to(self.device)
         self.indicator_gate = SoftGatingMechanism().to(self.device)
         self.sentiment_gate = SoftGatingMechanism().to(self.device)
+        self.orderbook_gate = SoftGatingMechanism().to(self.device)
         
         # Feature aggregator
         self.feature_aggregator = FeatureAggregator(
-            num_features=3,  # OHLCV, Indicators, Sentiment
+            num_features=4,  # OHLCV, Indicators, Sentiment, OrderBook
             embedding_size=EMBEDDING_SIZE
         ).to(self.device)
         
         # Decision head
         self.decision_head = DecisionHead().to(self.device)
+        
+        # Adaptive learning system
+        self.models_dict = {
+            'ohlcv_encoder': self.ohlcv_encoder,
+            'indicator_encoder': self.indicator_encoder,
+            'sentiment_encoder': self.sentiment_encoder,
+            'orderbook_encoder': self.orderbook_encoder,
+            'context_encoder': self.context_encoder,
+            'feature_aggregator': self.feature_aggregator,
+            'decision_head': self.decision_head
+        }
+        self.adaptive_learning = AdaptiveLearningSystem(self.models_dict)
         
         # Load models if available
         self.load_models()
@@ -89,6 +114,8 @@ class CryptoTradingBot:
         self.ohlcv_data = None
         self.indicators_data = None
         self.sentiment_data = None
+        self.orderbook_data = None
+        self.pattern_data = None
         
         # Trading state
         self.current_position = 'NONE'  # NONE, LONG, SHORT
@@ -98,8 +125,24 @@ class CryptoTradingBot:
         self.portfolio_value = INITIAL_CAPITAL
         self.trade_history = []
         
+        # Performance tracking
+        self.performance = {
+            'daily': 0.0,
+            'weekly': 0.0,
+            'monthly': 0.0,
+            'all_time': 0.0
+        }
+        
+        # Predictions history
+        self.predictions = []
+        
         # Set all models to evaluation mode
         self.set_eval_mode()
+        
+        # Bot control variables
+        self.running = False
+        self.should_stop = False
+        self.last_update_time = None
         
         logger.info(f"Trading bot initialized successfully on {self.device}")
     
@@ -108,10 +151,12 @@ class CryptoTradingBot:
         self.ohlcv_encoder.eval()
         self.indicator_encoder.eval()
         self.sentiment_encoder.eval()
+        self.orderbook_encoder.eval()
         self.context_encoder.eval()
         self.ohlcv_gate.eval()
         self.indicator_gate.eval()
         self.sentiment_gate.eval()
+        self.orderbook_gate.eval()
         self.feature_aggregator.eval()
         self.decision_head.eval()
     
@@ -130,6 +175,10 @@ class CryptoTradingBot:
             if os.path.exists(f"{model_dir}/sentiment_encoder.pth"):
                 self.sentiment_encoder.load_state_dict(torch.load(f"{model_dir}/sentiment_encoder.pth", map_location=self.device))
                 logger.info("Loaded Sentiment encoder model")
+            
+            if os.path.exists(f"{model_dir}/orderbook_encoder.pth"):
+                self.orderbook_encoder.load_state_dict(torch.load(f"{model_dir}/orderbook_encoder.pth", map_location=self.device))
+                logger.info("Loaded OrderBook encoder model")
                 
             if os.path.exists(f"{model_dir}/context_encoder.pth"):
                 self.context_encoder.load_state_dict(torch.load(f"{model_dir}/context_encoder.pth", map_location=self.device))
@@ -154,6 +203,7 @@ class CryptoTradingBot:
             torch.save(self.ohlcv_encoder.state_dict(), f"{model_dir}/ohlcv_encoder.pth")
             torch.save(self.indicator_encoder.state_dict(), f"{model_dir}/indicator_encoder.pth")
             torch.save(self.sentiment_encoder.state_dict(), f"{model_dir}/sentiment_encoder.pth")
+            torch.save(self.orderbook_encoder.state_dict(), f"{model_dir}/orderbook_encoder.pth")
             torch.save(self.context_encoder.state_dict(), f"{model_dir}/context_encoder.pth")
             torch.save(self.feature_aggregator.state_dict(), f"{model_dir}/feature_aggregator.pth")
             torch.save(self.decision_head.state_dict(), f"{model_dir}/decision_head.pth")
@@ -171,11 +221,18 @@ class CryptoTradingBot:
             # Calculate indicators
             if not self.ohlcv_data.empty:
                 self.indicators_data = self.indicator_encoder.calculate_indicators(self.ohlcv_data)
+                
+                # Detect candlestick patterns
+                self.pattern_data = self.pattern_detector.detect_patterns(self.indicators_data)
             else:
                 self.indicators_data = pd.DataFrame()
+                self.pattern_data = pd.DataFrame()
             
             # Fetch sentiment data
             self.sentiment_data = self.sentiment_collector.get_latest_sentiment()
+            
+            # Fetch orderbook data
+            self.orderbook_data = self.binance_collector.get_orderbook_snapshot(levels=10)
             
             # Start order book stream if not already started
             if not hasattr(self.binance_collector, 'ws_thread') or not self.binance_collector.ws_thread.is_alive():
@@ -199,11 +256,13 @@ class CryptoTradingBot:
                 ohlcv_mask = self.mask_generator.generate_mask('ohlcv', self.ohlcv_data)
                 indicator_mask = self.mask_generator.generate_mask('indicator', self.indicators_data)
                 sentiment_mask = self.mask_generator.generate_mask('sentiment', self.sentiment_data)
+                orderbook_mask = self.mask_generator.generate_mask('orderbook', self.orderbook_data)
                 
                 # Convert masks to tensors
                 ohlcv_mask_tensor = torch.tensor([ohlcv_mask], dtype=torch.float32).to(self.device)
                 indicator_mask_tensor = torch.tensor([indicator_mask], dtype=torch.float32).to(self.device)
                 sentiment_mask_tensor = torch.tensor([sentiment_mask], dtype=torch.float32).to(self.device)
+                orderbook_mask_tensor = torch.tensor([orderbook_mask], dtype=torch.float32).to(self.device)
                 
                 # Generate context vector from OHLCV data
                 context_features = self.context_encoder.create_context_features(self.ohlcv_data)
@@ -215,47 +274,41 @@ class CryptoTradingBot:
                 ohlcv_embedding = self.ohlcv_encoder(ohlcv_features)
                 
                 # Process indicator data
-                # Check if preprocess method exists, otherwise use fallback
-                if hasattr(self.indicator_encoder, 'preprocess'):
-                    indicator_features = self.indicator_encoder.preprocess(self.indicators_data).to(self.device)
-                else:
-                    # Fallback: create simple features from indicators
-                    logger.warning("Using fallback method for indicator preprocessing")
-                    # Extract 20 most important columns and convert to tensor
-                    if self.indicators_data is not None and not self.indicators_data.empty:
-                        selected_cols = [col for col in self.indicators_data.columns if col not in ['open', 'high', 'low', 'close', 'volume', 'open_time', 'close_time']]
-                        if selected_cols:
-                            selected_cols = selected_cols[:20]  # Take first 20 columns
-                            latest_values = self.indicators_data.iloc[-1][selected_cols].values
-                            # Normalize and clip values
-                            latest_values = np.clip(latest_values / np.abs(latest_values).max(), -1, 1)
-                            # Pad to 20 features if needed
-                            padded_values = np.zeros(20)
-                            padded_values[:len(latest_values)] = latest_values
-                            indicator_features = torch.tensor(padded_values, dtype=torch.float32).unsqueeze(0).to(self.device)
-                        else:
-                            indicator_features = torch.zeros((1, 20), dtype=torch.float32).to(self.device)
-                    else:
-                        indicator_features = torch.zeros((1, 20), dtype=torch.float32).to(self.device)
-                
+                indicator_features = self.indicator_encoder.preprocess(self.indicators_data).to(self.device)
                 indicator_embedding = self.indicator_encoder(indicator_features)
                 
                 # Process sentiment data
                 sentiment_features = self.sentiment_encoder.preprocess(self.sentiment_data).to(self.device)
                 sentiment_embedding = self.sentiment_encoder(sentiment_features)
                 
+                # Process orderbook data
+                orderbook_features = self.orderbook_encoder.preprocess(self.orderbook_data).to(self.device)
+                orderbook_embedding = self.orderbook_encoder(orderbook_features)
+                
                 # Apply soft gating with masks
                 ohlcv_gate_value, gated_ohlcv = self.ohlcv_gate(ohlcv_embedding, context_vector, ohlcv_mask_tensor)
                 indicator_gate_value, gated_indicator = self.indicator_gate(indicator_embedding, context_vector, indicator_mask_tensor)
                 sentiment_gate_value, gated_sentiment = self.sentiment_gate(sentiment_embedding, context_vector, sentiment_mask_tensor)
+                orderbook_gate_value, gated_orderbook = self.orderbook_gate(orderbook_embedding, context_vector, orderbook_mask_tensor)
                 
                 # Log gating values
-                logger.info(f"Gate values - OHLCV: {ohlcv_gate_value.item():.4f}, " +
-                            f"Indicator: {indicator_gate_value.item():.4f}, " +
-                            f"Sentiment: {sentiment_gate_value.item():.4f}")
+                gate_values = {
+                    'ohlcv': ohlcv_gate_value.item(),
+                    'indicator': indicator_gate_value.item(),
+                    'sentiment': sentiment_gate_value.item(),
+                    'orderbook': orderbook_gate_value.item()
+                }
+                
+                logger.info(f"Gate values - OHLCV: {gate_values['ohlcv']:.4f}, " +
+                            f"Indicator: {gate_values['indicator']:.4f}, " +
+                            f"Sentiment: {gate_values['sentiment']:.4f}, " +
+                            f"OrderBook: {gate_values['orderbook']:.4f}")
+                
+                # Update feature importance based on gate values and market conditions
+                self.adaptive_learning.adjust_feature_importance(self.ohlcv_data, gate_values)
                 
                 # Aggregate features
-                features_list = [gated_ohlcv, gated_indicator, gated_sentiment]
+                features_list = [gated_ohlcv, gated_indicator, gated_sentiment, gated_orderbook]
                 aggregated_features = self.feature_aggregator(features_list)
                 
                 # Generate predictions
@@ -268,6 +321,25 @@ class CryptoTradingBot:
                             f"(confidence: {trading_decision['signal_confidence']:.4f}), " +
                             f"Direction: {trading_decision['direction']} " +
                             f"(confidence: {trading_decision['direction_confidence']:.4f})")
+                
+                # Store prediction in history
+                current_price = float(self.ohlcv_data['close'].iloc[-1]) if not self.ohlcv_data.empty else 0.0
+                timestamp = datetime.now().isoformat()
+                
+                prediction_record = {
+                    'timestamp': timestamp,
+                    'price': current_price,
+                    'signal': trading_decision['signal'],
+                    'confidence': trading_decision['signal_confidence'],
+                    'direction': trading_decision['direction'],
+                    'price_prediction': trading_decision['price_prediction']
+                }
+                
+                self.predictions.append(prediction_record)
+                
+                # Keep only last 100 predictions
+                if len(self.predictions) > 100:
+                    self.predictions = self.predictions[-100:]
                 
                 return trading_decision
                 
@@ -289,7 +361,10 @@ class CryptoTradingBot:
         """
         try:
             # Get current price
-            current_price = float(self.ohlcv_data['close'].iloc[-1])
+            current_price = float(self.ohlcv_data['close'].iloc[-1]) if not self.ohlcv_data.empty else 0.0
+            if current_price == 0.0:
+                logger.warning("Invalid current price, skipping trade execution")
+                return False
             
             # Calculate position size based on risk
             risk_amount = self.available_capital * RISK_PER_TRADE
@@ -408,8 +483,28 @@ class CryptoTradingBot:
                 self.portfolio_value = self.available_capital
                 
             logger.debug(f"Updated portfolio value: {self.portfolio_value:.2f}")
+            
+            # Update performance metrics
+            self.update_performance_metrics()
+            
         except Exception as e:
             logger.error(f"Error updating portfolio value: {str(e)}")
+    
+    def update_performance_metrics(self):
+        """Update performance metrics (daily, weekly, monthly, all-time returns)"""
+        try:
+            # Simple implementation - can be expanded to use actual timestamps
+            # All-time return (from initial capital)
+            self.performance['all_time'] = ((self.portfolio_value / INITIAL_CAPITAL) - 1) * 100
+            
+            # For demonstration - simulate other returns
+            # In a real system, you'd track daily values and calculate actual returns
+            self.performance['daily'] = self.performance['all_time'] * 0.1  # Simulated daily return
+            self.performance['weekly'] = self.performance['all_time'] * 0.3  # Simulated weekly return
+            self.performance['monthly'] = self.performance['all_time'] * 0.7  # Simulated monthly return
+            
+        except Exception as e:
+            logger.error(f"Error updating performance metrics: {str(e)}")
     
     def check_stop_loss_take_profit(self):
         """
@@ -418,12 +513,14 @@ class CryptoTradingBot:
         Returns:
             bool: True if a position was closed, False otherwise
         """
+        if self.current_position == 'NONE':
+            return False
+            
         try:
-            if self.current_position == 'NONE':
-                return False
-                
             # Get current price
-            current_price = float(self.ohlcv_data['close'].iloc[-1])
+            current_price = float(self.ohlcv_data['close'].iloc[-1]) if not self.ohlcv_data.empty else 0.0
+            if current_price == 0.0:
+                return False
             
             # Check stop loss and take profit for LONG positions
             if self.current_position == 'LONG':
@@ -539,6 +636,157 @@ class CryptoTradingBot:
         except Exception as e:
             logger.error(f"Error saving trade history: {str(e)}")
     
+    def load_historical_data(self, file_path, timeframe="4h"):
+        """
+        Load historical OHLCV data from file
+        
+        Args:
+            file_path: Path to the CSV file with historical data
+            timeframe: Timeframe of the data
+            
+        Returns:
+            pandas.DataFrame: Loaded historical data
+        """
+        try:
+            if not os.path.exists(file_path):
+                logger.error(f"Historical data file not found: {file_path}")
+                return None
+            
+            # Load data from CSV
+            data = pd.read_csv(file_path)
+            
+            # Convert timestamp to datetime if present
+            if 'timestamp' in data.columns:
+                data['timestamp'] = pd.to_datetime(data['timestamp'])
+                data.set_index('timestamp', inplace=True)
+            
+            logger.info(f"Loaded {len(data)} historical candles from {file_path}")
+            
+            # Pass to adaptive learning system
+            self.adaptive_learning.load_historical_data(data, timeframe)
+            
+            return data
+            
+        except Exception as e:
+            logger.error(f"Error loading historical data: {str(e)}")
+            return None
+    
+    def train_on_historical_data(self, epochs=5):
+        """
+        Train models on loaded historical data
+        
+        Args:
+            epochs: Number of training epochs
+            
+        Returns:
+            dict: Training results
+        """
+        try:
+            logger.info("Starting training on historical data")
+            results = self.adaptive_learning.train_on_historical_data(epochs=epochs)
+            
+            if results['success']:
+                logger.info(f"Training completed successfully after {epochs} epochs")
+                # Save updated models
+                self.save_models()
+            else:
+                logger.error(f"Training failed: {results.get('error', 'Unknown error')}")
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error during historical training: {str(e)}")
+            return {'success': False, 'error': str(e)}
+    
+    def get_system_stats(self):
+        """
+        Get system statistics
+        
+        Returns:
+            dict: System statistics
+        """
+        try:
+            stats = {
+                'cpu_usage': psutil.cpu_percent(interval=None),
+                'memory_usage': psutil.virtual_memory().percent,
+                'uptime': (datetime.now() - self.last_update_time).total_seconds() if self.last_update_time else 0,
+                'errors': []
+            }
+            
+            return stats
+        except Exception as e:
+            logger.error(f"Error getting system stats: {str(e)}")
+            return {
+                'cpu_usage': 0,
+                'memory_usage': 0,
+                'uptime': 0,
+                'errors': [str(e)]
+            }
+    
+    def get_bot_data_for_web(self):
+        """
+        Get bot data for web interface
+        
+        Returns:
+            dict: Bot data
+        """
+        # Current positions
+        positions = []
+        if self.current_position != 'NONE':
+            current_price = float(self.ohlcv_data['close'].iloc[-1]) if not self.ohlcv_data.empty else 0.0
+            
+            if self.current_position == 'LONG':
+                unrealized_pnl = ((current_price / self.position_entry_price) - 1) * 100
+            else:  # SHORT
+                unrealized_pnl = ((self.position_entry_price / current_price) - 1) * 100
+            
+            positions.append({
+                'symbol': self.symbol,
+                'position_type': self.current_position,
+                'amount': self.position_size,
+                'entry_price': self.position_entry_price,
+                'current_price': current_price,
+                'unrealized_pnl': unrealized_pnl
+            })
+        
+        # Format signals for web interface
+        signals = []
+        for pred in self.predictions:
+            signals.append({
+                'timestamp': pred['timestamp'],
+                'signal': pred['signal'],
+                'price': pred['price'],
+                'confidence': pred['confidence']
+            })
+        
+        # Extract indicators for charting
+        indicators = {}
+        if not self.indicators_data.empty:
+            for col in ['rsi_14', 'macd', 'bb_upper', 'bb_lower', 'ema_9', 'sma_20']:
+                if col in self.indicators_data.columns:
+                    indicators[col] = self.indicators_data[col].tolist()
+        
+        # Get model stats
+        model_stats = self.adaptive_learning.get_update_stats()
+        
+        # Format data for web interface
+        bot_data = {
+            'status': 'running' if self.running else 'stopped',
+            'portfolio': {
+                'balance': self.available_capital,
+                'equity': self.portfolio_value,
+                'positions': positions
+            },
+            'performance': self.performance,
+            'signals': signals,
+            'ohlcv': self.ohlcv_data,
+            'indicators': indicators,
+            'model_stats': model_stats,
+            'system_stats': self.get_system_stats()
+        }
+        
+        return bot_data
+    
     def run(self, interval=UPDATE_INTERVAL):
         """
         Run the trading bot in a loop
@@ -547,10 +795,16 @@ class CryptoTradingBot:
             interval: Seconds between updates
         """
         logger.info(f"Starting trading bot for {self.symbol}")
+        self.running = True
+        self.should_stop = False
+        self.last_update_time = datetime.now()
         
         try:
-            while True:
+            while not self.should_stop:
                 logger.info(f"--- Update cycle started at {datetime.now().isoformat()} ---")
+                
+                # Check for messages from web interface
+                self.check_web_messages()
                 
                 # Fetch data
                 if not self.fetch_data():
@@ -575,7 +829,7 @@ class CryptoTradingBot:
                         logger.info(f"Executed trading signal: {trading_decision['signal']}")
                 
                 # Update portfolio value
-                current_price = float(self.ohlcv_data['close'].iloc[-1])
+                current_price = float(self.ohlcv_data['close'].iloc[-1]) if not self.ohlcv_data.empty else 0.0
                 self.update_portfolio_value(current_price)
                 
                 # Log current state
@@ -587,23 +841,94 @@ class CryptoTradingBot:
                 if len(self.trade_history) > 0 and len(self.trade_history) % 10 == 0:
                     self.save_trade_history()
                 
+                # Update data for web interface
+                web_data = self.get_bot_data_for_web()
+                update_from_trading_bot(web_data)
+                
+                # Update the last update time
+                self.last_update_time = datetime.now()
+                
                 logger.info(f"--- Update cycle completed, waiting {interval} seconds ---")
                 time.sleep(interval)
                 
         except KeyboardInterrupt:
             logger.info("Trading bot stopped by user")
-            # Save trade history before exit
-            self.save_trade_history()
-            # Close connections
-            self.binance_collector.close()
         except Exception as e:
             logger.error(f"Unexpected error in trading bot: {str(e)}")
-            # Save trade history before exit
+        finally:
+            # Cleanup before exit
+            self.running = False
             self.save_trade_history()
-            # Close connections
+            self.save_models()
             self.binance_collector.close()
+            
+            # Update web interface
+            update_from_trading_bot({'status': 'stopped'})
+    
+    def start(self):
+        """Start the trading bot in a separate thread"""
+        if not self.running:
+            self.bot_thread = threading.Thread(target=self.run)
+            self.bot_thread.daemon = True
+            self.bot_thread.start()
+            return True
+        return False
+    
+    def stop(self):
+        """Stop the trading bot"""
+        if self.running:
+            self.should_stop = True
+            return True
+        return False
+    
+    def check_web_messages(self):
+        """Check messages from web interface"""
+        try:
+            # Process all messages in queue
+            while not bot_message_queue.empty():
+                message = bot_message_queue.get(block=False)
+                
+                if message['type'] == 'command':
+                    command = message.get('command')
+                    if command == 'stop':
+                        logger.info("Received stop command from web interface")
+                        self.should_stop = True
+                    elif command == 'restart':
+                        logger.info("Received restart command from web interface")
+                        self.should_stop = True
+                        # A new bot will be started by the main thread
+                
+                elif message['type'] == 'settings_update':
+                    settings = message.get('settings', {})
+                    
+                    # Update bot settings
+                    if 'symbol' in settings and settings['symbol'] != self.symbol:
+                        logger.info(f"Symbol changed from {self.symbol} to {settings['symbol']}")
+                        self.symbol = settings['symbol']
+                        self.binance_collector = BinanceDataCollector(symbol=self.symbol, timeframe=self.timeframe)
+                    
+                    if 'timeframe' in settings and settings['timeframe'] != self.timeframe:
+                        logger.info(f"Timeframe changed from {self.timeframe} to {settings['timeframe']}")
+                        self.timeframe = settings['timeframe']
+                        self.binance_collector = BinanceDataCollector(symbol=self.symbol, timeframe=self.timeframe)
+                    
+                    # Update risk management settings
+                    global RISK_PER_TRADE, TAKE_PROFIT_RATIO, STOP_LOSS_RATIO
+                    if 'risk_per_trade' in settings:
+                        RISK_PER_TRADE = settings['risk_per_trade']
+                    if 'take_profit' in settings:
+                        TAKE_PROFIT_RATIO = settings['take_profit']
+                    if 'stop_loss' in settings:
+                        STOP_LOSS_RATIO = settings['stop_loss']
+                    
+                    logger.info("Updated settings from web interface")
+        
+        except Exception as e:
+            logger.error(f"Error checking web messages: {str(e)}")
 
-if __name__ == "__main__":
+
+# Main function to run the trading bot
+def main():
     # Create necessary directories
     os.makedirs("logs", exist_ok=True)
     os.makedirs("data", exist_ok=True)
@@ -621,4 +946,19 @@ if __name__ == "__main__":
     
     # Create and run the trading bot
     trading_bot = CryptoTradingBot()
-    trading_bot.run()
+    
+    # Optional: Load historical data for training
+    # btc_data = trading_bot.load_historical_data("data/historical/btc_4h.csv", timeframe="4h")
+    # eth_data = trading_bot.load_historical_data("data/historical/eth_4h.csv", timeframe="4h")
+    # if btc_data is not None:
+    #     trading_bot.train_on_historical_data(epochs=5)
+    
+    # Start the bot
+    trading_bot.start()
+    
+    # Start web interface in the main thread
+    from web_interface.app import start_web_server
+    start_web_server(host='0.0.0.0', port=5000, debug=False)
+
+if __name__ == "__main__":
+    main()
