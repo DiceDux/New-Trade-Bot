@@ -194,6 +194,75 @@ class CryptoTradingBot:
         except Exception as e:
             logger.error(f"Error loading models: {str(e)}")
     
+    def generate_signals(self, data):
+        """
+        Generate trading signals for backtesting
+        
+        Args:
+            data: DataFrame with OHLCV data
+            
+        Returns:
+            dict: Trading signal information
+        """
+        try:
+            # Save data temporarily for processing
+            self.ohlcv_data = data
+            
+            # Calculate indicators
+            if not self.ohlcv_data.empty:
+                self.indicators_data = self.indicator_encoder.calculate_indicators(self.ohlcv_data)
+                self.pattern_data = self.pattern_detector.detect_patterns(self.indicators_data)
+            
+            # Use existing process_data logic but with some modifications
+            with torch.no_grad():
+                # Generate context vector from OHLCV data
+                context_features = self.context_encoder.create_context_features(self.ohlcv_data)
+                context_features = context_features.to(self.device)
+                context_vector = self.context_encoder(context_features)
+                
+                # Process OHLCV data
+                ohlcv_features = self.ohlcv_encoder.preprocess(self.ohlcv_data).to(self.device)
+                ohlcv_embedding = self.ohlcv_encoder(ohlcv_features)
+                
+                # Process indicator data
+                indicator_features = self.indicator_encoder.preprocess(self.indicators_data).to(self.device)
+                indicator_embedding = self.indicator_encoder(indicator_features)
+                
+                # For backtesting, use dummy sentiment and orderbook data
+                sentiment_embedding = torch.zeros((1, EMBEDDING_SIZE), device=self.device)
+                orderbook_embedding = torch.zeros((1, EMBEDDING_SIZE), device=self.device)
+                
+                # Apply soft gating - use 1.0 as mask value for available data
+                _, gated_ohlcv = self.ohlcv_gate(ohlcv_embedding, context_vector, 1.0)
+                _, gated_indicator = self.indicator_gate(indicator_embedding, context_vector, 1.0)
+                _, gated_sentiment = self.sentiment_gate(sentiment_embedding, context_vector, 0.0)
+                _, gated_orderbook = self.orderbook_gate(orderbook_embedding, context_vector, 0.0)
+                
+                # Aggregate features
+                features_list = [gated_ohlcv, gated_indicator, gated_sentiment, gated_orderbook]
+                aggregated_features = self.feature_aggregator(features_list)
+                
+                # Generate predictions
+                predictions = self.decision_head(aggregated_features)
+                
+                # Get trading decision
+                trading_decision = self.decision_head.get_trading_decision(predictions)
+                
+                return trading_decision
+                
+        except Exception as e:
+            logger.error(f"Error generating signals for backtesting: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            # Return a default HOLD signal in case of error
+            return {
+                'signal': 'HOLD', 
+                'signal_confidence': 0.0,
+                'direction': 'NEUTRAL',
+                'direction_confidence': 0.0,
+                'price_prediction': 0.0
+            }
+
     def save_models(self):
         """Save models to files"""
         model_dir = "models"
