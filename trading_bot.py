@@ -214,7 +214,7 @@ class CryptoTradingBot:
                 ohlcv_features = self.ohlcv_encoder.preprocess(self.ohlcv_data).to(self.device)
                 ohlcv_embedding = self.ohlcv_encoder(ohlcv_features)
                 
-                # Process indicator data
+                # Process indicator data - directly use the calculated indicators
                 indicator_features = self.indicator_encoder.preprocess(self.indicators_data).to(self.device)
                 indicator_embedding = self.indicator_encoder(indicator_features)
                 
@@ -229,8 +229,8 @@ class CryptoTradingBot:
                 
                 # Log gating values
                 logger.debug(f"Gate values - OHLCV: {ohlcv_gate_value.item():.4f}, " +
-                             f"Indicator: {indicator_gate_value.item():.4f}, " +
-                             f"Sentiment: {sentiment_gate_value.item():.4f}")
+                            f"Indicator: {indicator_gate_value.item():.4f}, " +
+                            f"Sentiment: {sentiment_gate_value.item():.4f}")
                 
                 # Aggregate features
                 features_list = [gated_ohlcv, gated_indicator, gated_sentiment]
@@ -251,6 +251,8 @@ class CryptoTradingBot:
                 
         except Exception as e:
             logger.error(f"Error processing data: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())  # اضافه کردن اطلاعات بیشتر خطا
             return None
     
     def execute_trading_signal(self, trading_decision):
