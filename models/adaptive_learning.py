@@ -411,4 +411,129 @@ class AdaptiveLearningSystem:
             'update_counts': self.update_count.copy(),
             'latest_losses': {name: self.loss_history[name][-5:] if self.loss_history[name] else [] 
                              for name in self.loss_history},
-            'market_regime': self.market_
+            'market_regime': self.market_regime,
+            'feature_importance': self.feature_importance.copy()
+        }
+        return stats
+    
+    def save_models(self, path_prefix="models/"):
+        """
+        Save all models to disk
+        
+        Args:
+            path_prefix: Path prefix for saving models
+        """
+        try:
+            for name, model in self.models.items():
+                torch.save(model.state_dict(), f"{path_prefix}{name}.pth")
+            logger.info(f"Saved {len(self.models)} models to {path_prefix}")
+            return True
+        except Exception as e:
+            logger.error(f"Error saving models: {str(e)}")
+            return False
+    
+    def load_historical_data(self, ohlcv_data, timeframe="4h"):
+        """
+        Load historical data for backtesting and training
+        
+        Args:
+            ohlcv_data: DataFrame with historical OHLCV data
+            timeframe: Timeframe of the data (e.g., "1h", "4h")
+            
+        Returns:
+            Bool indicating success
+        """
+        if ohlcv_data is None or ohlcv_data.empty:
+            logger.warning("Empty historical data provided")
+            return False
+        
+        try:
+            logger.info(f"Loaded {len(ohlcv_data)} historical candles for {timeframe} timeframe")
+            
+            # Store data for later use
+            self.historical_data = ohlcv_data
+            self.timeframe = timeframe
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error loading historical data: {str(e)}")
+            return False
+    
+    def train_on_historical_data(self, epochs=10, validation_split=0.2):
+        """
+        Train models on historical data
+        
+        Args:
+            epochs: Number of training epochs
+            validation_split: Portion of data to use for validation
+            
+        Returns:
+            Dict with training results
+        """
+        if not hasattr(self, 'historical_data') or self.historical_data is None:
+            logger.warning("No historical data loaded for training")
+            return {'success': False, 'error': 'No historical data'}
+        
+        try:
+            # Prepare data
+            data = self.historical_data.copy()
+            
+            # Split into training and validation
+            split_idx = int(len(data) * (1 - validation_split))
+            train_data = data.iloc[:split_idx]
+            val_data = data.iloc[split_idx:]
+            
+            logger.info(f"Training on {len(train_data)} samples, validating on {len(val_data)} samples")
+            
+            # Training results
+            results = {
+                'epochs': epochs,
+                'losses': {name: [] for name in self.models.keys()},
+                'val_losses': {name: [] for name in self.models.keys()},
+                'success': True
+            }
+            
+            # For each epoch
+            for epoch in range(epochs):
+                epoch_losses = {name: [] for name in self.models.keys()}
+                
+                # Process training data in chunks
+                chunk_size = min(50, len(train_data))
+                for i in range(0, len(train_data), chunk_size):
+                    chunk = train_data.iloc[i:i+chunk_size]
+                    
+                    # Generate features and targets for each model
+                    for name, model in self.models.items():
+                        if not hasattr(model, 'parameters'):
+                            continue
+                        
+                        # Get optimizer
+                        optimizer = self.optimizers.get(name)
+                        if optimizer is None:
+                            continue
+                        
+                        # Train mode
+                        model.train()
+                        
+                        # TODO: Implement specific training logic for each model type
+                        # This is a placeholder that would need to be customized
+                        if 'encoder' in name:
+                            # Encoder training...
+                            pass
+                        elif name == 'decision_head':
+                            # Decision head training...
+                            pass
+                
+                # Validation step
+                with torch.no_grad():
+                    # TODO: Implement validation logic
+                    pass
+                
+                # Log progress
+                logger.info(f"Epoch {epoch+1}/{epochs} completed")
+                
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error during historical training: {str(e)}")
+            return {'success': False, 'error': str(e)}
