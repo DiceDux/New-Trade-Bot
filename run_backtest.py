@@ -2,18 +2,29 @@ import pandas as pd
 from tools.backtester import Backtester
 from trading_bot import CryptoTradingBot
 import matplotlib.pyplot as plt
+from data_collectors.mysql_data import MySQLDataCollector
 
-# 1. لود کردن داده‌های تاریخی
-print("Loading historical data...")
-try:
-    # تلاش برای خواندن از فایل‌های CSV
-    btc_data = pd.read_csv("data/historical/btc_4h.csv")
-    btc_data['timestamp'] = pd.to_datetime(btc_data['timestamp'])
-    btc_data.set_index('timestamp', inplace=True)
-    print(f"Loaded {len(btc_data)} candles for BTC")
-except FileNotFoundError:
-    print("Historical data file not found! Please make sure data/historical/btc_4h.csv exists")
+# 1. لود کردن داده‌های تاریخی از MySQL
+print("Loading historical data from MySQL...")
+mysql_collector = MySQLDataCollector(
+    host="localhost",  # تغییر دهید اگر لازم است
+    user="root",       # تغییر دهید به نام کاربری MySQL خود
+    password="",       # تغییر دهید به رمز عبور MySQL خود
+    database="tradebot-pro"
+)
+
+btc_data = mysql_collector.get_historical_candles(
+    symbol="BTCUSDT", 
+    timeframe="4h",
+    start_date="2023-01-01 00:00:00",  # تاریخ شروع - تنظیم کنید
+    end_date="2023-12-31 23:59:59"     # تاریخ پایان - تنظیم کنید
+)
+
+if btc_data.empty:
+    print("Error: Could not load historical data from MySQL!")
     exit(1)
+
+print(f"Loaded {len(btc_data)} candles for BTC from MySQL")
 
 # 2. ساخت نمونه از ربات معاملاتی به عنوان استراتژی
 print("Creating trading bot instance...")
@@ -28,9 +39,7 @@ print("Running backtest...")
 results, transactions = backtester.run_backtest(
     strategy=bot,
     data=btc_data,
-    timeframe="4h",
-    start_date="2023-01-01",  # این تاریخ‌ها را متناسب با داده‌های خود تنظیم کنید
-    end_date="2023-12-31"
+    timeframe="4h"
 )
 
 # 5. نمایش نتایج و گزارش
@@ -40,6 +49,7 @@ for key, value in backtester.metrics.items():
 
 # 6. ذخیره گزارش
 print("\nGenerating report...")
+os.makedirs("backtest_reports", exist_ok=True)
 report_path = backtester.generate_report(results, transactions, save_path="backtest_reports/btc_backtest.html")
 print(f"Report saved to: {report_path}")
 
