@@ -214,8 +214,30 @@ class CryptoTradingBot:
                 ohlcv_features = self.ohlcv_encoder.preprocess(self.ohlcv_data).to(self.device)
                 ohlcv_embedding = self.ohlcv_encoder(ohlcv_features)
                 
-                # Process indicator data - directly use the calculated indicators
-                indicator_features = self.indicator_encoder.preprocess(self.indicators_data).to(self.device)
+                # Process indicator data
+                # Check if preprocess method exists, otherwise use fallback
+                if hasattr(self.indicator_encoder, 'preprocess'):
+                    indicator_features = self.indicator_encoder.preprocess(self.indicators_data).to(self.device)
+                else:
+                    # Fallback: create simple features from indicators
+                    logger.warning("Using fallback method for indicator preprocessing")
+                    # Extract 20 most important columns and convert to tensor
+                    if self.indicators_data is not None and not self.indicators_data.empty:
+                        selected_cols = [col for col in self.indicators_data.columns if col not in ['open', 'high', 'low', 'close', 'volume', 'open_time', 'close_time']]
+                        if selected_cols:
+                            selected_cols = selected_cols[:20]  # Take first 20 columns
+                            latest_values = self.indicators_data.iloc[-1][selected_cols].values
+                            # Normalize and clip values
+                            latest_values = np.clip(latest_values / np.abs(latest_values).max(), -1, 1)
+                            # Pad to 20 features if needed
+                            padded_values = np.zeros(20)
+                            padded_values[:len(latest_values)] = latest_values
+                            indicator_features = torch.tensor(padded_values, dtype=torch.float32).unsqueeze(0).to(self.device)
+                        else:
+                            indicator_features = torch.zeros((1, 20), dtype=torch.float32).to(self.device)
+                    else:
+                        indicator_features = torch.zeros((1, 20), dtype=torch.float32).to(self.device)
+                
                 indicator_embedding = self.indicator_encoder(indicator_features)
                 
                 # Process sentiment data
@@ -228,7 +250,7 @@ class CryptoTradingBot:
                 sentiment_gate_value, gated_sentiment = self.sentiment_gate(sentiment_embedding, context_vector, sentiment_mask_tensor)
                 
                 # Log gating values
-                logger.debug(f"Gate values - OHLCV: {ohlcv_gate_value.item():.4f}, " +
+                logger.info(f"Gate values - OHLCV: {ohlcv_gate_value.item():.4f}, " +
                             f"Indicator: {indicator_gate_value.item():.4f}, " +
                             f"Sentiment: {sentiment_gate_value.item():.4f}")
                 
@@ -252,7 +274,7 @@ class CryptoTradingBot:
         except Exception as e:
             logger.error(f"Error processing data: {str(e)}")
             import traceback
-            logger.error(traceback.format_exc())  # اضافه کردن اطلاعات بیشتر خطا
+            logger.error(traceback.format_exc())
             return None
     
     def execute_trading_signal(self, trading_decision):
