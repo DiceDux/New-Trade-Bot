@@ -154,6 +154,8 @@ class Backtester:
                         'fee': fee,
                         'balance': balance
                     })
+                    
+                print(f"Candle {i}, Signal: {signal['signal']}, Confidence: {signal['signal_confidence']}")    
                 
                 # Calculate equity (balance + position value)
                 position_value = position * current_price
