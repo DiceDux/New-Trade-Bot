@@ -215,8 +215,21 @@ class CryptoTradingBot:
     def fetch_data(self):
         """Fetch all required data"""
         try:
-            # Fetch OHLCV data
-            self.ohlcv_data = self.binance_collector.get_klines(limit=100)
+            # Fetch OHLCV data from MySQL
+            from data_collectors.mysql_data import MySQLDataCollector
+            
+            mysql_collector = MySQLDataCollector(
+                host="localhost",  # تغییر دهید اگر لازم است
+                user="root",       # تغییر دهید به نام کاربری MySQL خود
+                password="",       # تغییر دهید به رمز عبور MySQL خود
+                database="tradebot-pro"
+            )
+            
+            self.ohlcv_data = mysql_collector.get_latest_candles(
+                symbol=self.symbol,
+                timeframe=self.timeframe,
+                limit=100
+            )
             
             # Calculate indicators
             if not self.ohlcv_data.empty:
