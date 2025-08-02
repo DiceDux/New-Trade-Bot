@@ -85,7 +85,7 @@ class DecisionHead(nn.Module):
             'signal': signal_probs
         }
     
-    def get_trading_decision(self, predictions, threshold=0.3):
+    def get_trading_decision(self, predictions, threshold=0.0):
         """
         Convert model predictions to trading decision
         
