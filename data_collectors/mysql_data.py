@@ -85,8 +85,8 @@ class MySQLDataCollector:
             if isinstance(end_date, str):
                 end_date = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
                 
-            # Build query
-            query = f"SELECT * FROM candles WHERE symbol = '{symbol}' AND timeframe = '{timeframe}'"
+            # Build query - حذف timeframe از کوئری
+            query = f"SELECT * FROM candles WHERE symbol = '{symbol}'"
             
             if start_date:
                 query += f" AND timestamp >= '{start_date}'"
@@ -102,7 +102,7 @@ class MySQLDataCollector:
             cursor.close()
             
             if not rows:
-                logger.warning(f"No candles found for {symbol} {timeframe}")
+                logger.warning(f"No candles found for {symbol}")
                 return pd.DataFrame()
             
             # Convert to dataframe
@@ -130,7 +130,7 @@ class MySQLDataCollector:
             for col in required_columns:
                 df[col] = pd.to_numeric(df[col])
                 
-            logger.info(f"Retrieved {len(df)} candles for {symbol} {timeframe} from MySQL")
+            logger.info(f"Retrieved {len(df)} candles for {symbol} from MySQL")
             return df
             
         except Error as e:
